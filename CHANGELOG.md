@@ -7,6 +7,12 @@ Versioning: [SemVer](https://semver.org/)
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-09-19
+
+### Fixed
+
+- Telemetry sink now fires on cache hits ([#8](https://github.com/jayanti-prajapati/smart-ai-router/issues/8)). Previously `setTelemetrySink` callbacks were skipped entirely when a response was served from cache. Cache-hit rows are distinguishable via `row.cached === true`, `row.costUsd === 0`, and `row.provider === 'cache'`.
+
 ## [1.1.3] - 2026-09-19
 
 ### Changed
