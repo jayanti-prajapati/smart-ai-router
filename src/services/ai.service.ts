@@ -8,25 +8,25 @@
  * model first (usually a different vendor, which survives one vendor being
  * down), and only then gives up. A quality failure escalates UP a tier, once.
  */
-import { randomUUID } from 'node:crypto';
-import { classify } from '../core/classifier.js';
-import { computeCost, estimateOutputTokens } from '../core/cost.js';
-import { scoreOutput } from '../core/quality.js';
-import { route } from '../core/router.js';
-import { TIER_ORDER } from '../config/models.js';
-import { env } from '../config/env.js';
-import { getPrompt, promptRef, render } from '../prompts/registry.js';
-import { getProvider } from '../providers/registry.js';
-import { getCached, setCached } from './cache.js';
-import { budget, logger, recordRequest } from './telemetry.js';
+import { randomUUID } from "node:crypto";
+import { classify } from "../core/classifier.js";
+import { computeCost, estimateOutputTokens } from "../core/cost.js";
+import { scoreOutput } from "../core/quality.js";
+import { route } from "../core/router.js";
+import { TIER_ORDER } from "../config/models.js";
+import { env } from "../config/env.js";
+import { getPrompt, promptRef, render } from "../prompts/registry.js";
+import { getProvider } from "../providers/registry.js";
+import { getCached, setCached } from "./cache.js";
+import { budget, logger, recordRequest } from "./telemetry.js";
 import type {
   Complexity,
   NormalizedResponse,
   RoutingDecision,
   RunRequest,
   RunResponse,
-} from '../core/types.js';
-import { NoModelAvailableError } from '../core/types.js';
+} from "../core/types.js";
+import { NoModelAvailableError } from "../core/types.js";
 
 /** Max distinct models tried for one request before giving up. */
 const MAX_MODEL_ATTEMPTS = 3;
@@ -34,13 +34,29 @@ const MAX_MODEL_ATTEMPTS = 3;
 export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
   const requestId = randomUUID();
   const started = Date.now();
-  const priority = req.priority ?? 'balanced';
+  const priority = req.priority ?? "balanced";
 
   // ---------- 1. Cache ----------
   const cached = await getCached(req);
   if (cached) {
-    logger.debug({ requestId }, 'cache hit');
-    return { ...cached, cached: true, latencyMs: Date.now() - started };
+    const latencyMs = Date.now() - started;
+    logger.debug({ requestId }, "cache hit");
+    recordRequest({
+      requestId,
+      task: req.task,
+      modelUsed: cached.modelUsed,
+      provider: "cache",
+      complexity: cached.complexity,
+      priority,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      latencyMs,
+      cached: true,
+      escalated: false,
+      createdAt: new Date().toISOString(),
+    });
+    return { ...cached, cached: true, latencyMs };
   }
 
   // ---------- 2. Prompt template ----------
@@ -53,8 +69,10 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
         complexity: template.pinnedComplexity,
         confidence: 1,
         signals: [`pinned by prompt ${promptRef(template)}`],
-        estimatedInputTokens: Math.ceil((prompt.length + template.system.length) / 3.7),
-        source: 'forced' as const,
+        estimatedInputTokens: Math.ceil(
+          (prompt.length + template.system.length) / 3.7,
+        ),
+        source: "forced" as const,
       }
     : await classify({ ...req, input: prompt });
 
@@ -65,7 +83,7 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
   if (budgetExceeded) {
     logger.warn(
       { requestId, spent: budget.total, limit: env.DAILY_BUDGET_USD },
-      'daily budget exceeded — forcing cheapest tier',
+      "daily budget exceeded — forcing cheapest tier",
     );
   }
 
@@ -78,13 +96,15 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
     let decision: RoutingDecision;
     try {
       decision = route(
-        budgetExceeded ? { ...req, priority: 'speed' } : req,
+        budgetExceeded ? { ...req, priority: "speed" } : req,
         classification,
         {
           exclude: tried,
           acceptCost: req.acceptCost,
           experimentKey: requestId,
-          minTier: escalatedFrom ? escalateTier(classification.complexity) : undefined,
+          minTier: escalatedFrom
+            ? escalateTier(classification.complexity)
+            : undefined,
         },
       );
     } catch (err) {
@@ -104,7 +124,7 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
         reason: decision.reason,
         estimatedCost: decision.estimatedCost,
       },
-      'routing decision',
+      "routing decision",
     );
 
     // ---------- 6. Call the provider ----------
@@ -116,24 +136,35 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
         system: template.system,
         prompt,
         maxOutputTokens: Math.min(
-          estimateOutputTokens(classification.estimatedInputTokens, decision.complexity),
+          estimateOutputTokens(
+            classification.estimatedInputTokens,
+            decision.complexity,
+          ),
           decision.model.maxOutputTokens,
         ),
-        temperature: template.temperature ?? defaultTemperature(decision.complexity),
+        temperature:
+          template.temperature ?? defaultTemperature(decision.complexity),
       });
     } catch (err) {
       lastError = err;
-      logger.warn({ requestId, model: decision.model.id, err }, 'provider call failed, failing over');
+      logger.warn(
+        { requestId, model: decision.model.id, err },
+        "provider call failed, failing over",
+      );
       continue; // Try a different model — often a different vendor entirely.
     }
 
     const latencyMs = Date.now() - callStarted;
-    const cost = computeCost(decision.model, result.inputTokens, result.outputTokens);
+    const cost = computeCost(
+      decision.model,
+      result.inputTokens,
+      result.outputTokens,
+    );
     budget.add(cost);
 
     // ---------- 7. Quality gate ----------
     const quality = scoreOutput(result, {
-      expectJson: template.id === 'json-transform',
+      expectJson: template.id === "json-transform",
     });
 
     const canEscalate =
@@ -141,13 +172,18 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
       quality.score < env.QUALITY_MIN_SCORE &&
       !escalatedFrom &&
       !req.forceModel &&
-      decision.complexity !== 'complex' &&
+      decision.complexity !== "complex" &&
       attempt < MAX_MODEL_ATTEMPTS - 1;
 
     if (canEscalate) {
       logger.info(
-        { requestId, model: decision.model.id, score: quality.score, reasons: quality.reasons },
-        'low quality output — escalating to a stronger model',
+        {
+          requestId,
+          model: decision.model.id,
+          score: quality.score,
+          reasons: quality.reasons,
+        },
+        "low quality output — escalating to a stronger model",
       );
       // The failed attempt still cost money, so it still gets a telemetry row.
       recordRequest({
@@ -163,7 +199,7 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
         latencyMs,
         cached: false,
         escalated: true,
-        error: `quality ${quality.score.toFixed(2)}: ${quality.reasons.join('; ')}`,
+        error: `quality ${quality.score.toFixed(2)}: ${quality.reasons.join("; ")}`,
         createdAt: new Date().toISOString(),
       });
       escalatedFrom = decision.model.id;
@@ -187,7 +223,9 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
               routingReason: `${decision.reason} | prompt=${promptRef(template)} | quality=${quality.score.toFixed(2)}`,
               inputTokens: result.inputTokens,
               outputTokens: result.outputTokens,
-              ...(decision.experiment ? { experiment: decision.experiment } : {}),
+              ...(decision.experiment
+                ? { experiment: decision.experiment }
+                : {}),
             },
           }
         : {}),
@@ -215,7 +253,10 @@ export async function runAiRequest(req: RunRequest): Promise<RunResponse> {
     return response;
   }
 
-  throw lastError ?? new NoModelAvailableError(`All ${tried.length} model attempts failed`);
+  throw (
+    lastError ??
+    new NoModelAvailableError(`All ${tried.length} model attempts failed`)
+  );
 }
 
 function escalateTier(current: Complexity): Complexity {
@@ -225,5 +266,5 @@ function escalateTier(current: Complexity): Complexity {
 
 /** Deterministic work wants low temperature; design work benefits from some. */
 function defaultTemperature(complexity: Complexity): number {
-  return complexity === 'simple' ? 0 : complexity === 'medium' ? 0.3 : 0.5;
+  return complexity === "simple" ? 0 : complexity === "medium" ? 0.3 : 0.5;
 }
