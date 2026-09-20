@@ -10,8 +10,8 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create GitHub Release
-      id-token: write   # npm provenance (links package to exact git commit)
+      contents: write # create GitHub Release
+      id-token: write # npm provenance (links package to exact git commit)
 
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +30,15 @@ jobs:
         run: npm run build
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view smart-ai-router@${PKG_VERSION} version 2>/dev/null || echo "")
+          if [ -z "$PUBLISHED" ]; then
+            echo "Publishing smart-ai-router@${PKG_VERSION}..."
+            npm publish --access public --provenance
+          else
+            echo "smart-ai-router@${PKG_VERSION} already published — skipping publish, creating GitHub Release only."
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
