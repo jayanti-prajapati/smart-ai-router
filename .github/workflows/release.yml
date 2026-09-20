@@ -32,12 +32,14 @@ jobs:
       - name: Publish to npm
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
-          PUBLISHED=$(npm view smart-ai-router@${PKG_VERSION} version 2>/dev/null || echo "")
-          if [ -z "$PUBLISHED" ]; then
+          # Use the public registry API (no auth needed) to check if the version exists
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://registry.npmjs.org/smart-ai-router/${PKG_VERSION}")
+          if [ "$HTTP_STATUS" = "404" ]; then
             echo "Publishing smart-ai-router@${PKG_VERSION}..."
             npm publish --access public --provenance
           else
-            echo "smart-ai-router@${PKG_VERSION} already published — skipping publish, creating GitHub Release only."
+            echo "smart-ai-router@${PKG_VERSION} already published (HTTP ${HTTP_STATUS}) — skipping publish, creating GitHub Release only."
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
