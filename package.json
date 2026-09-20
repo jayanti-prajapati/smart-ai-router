@@ -1,6 +1,6 @@
 {
   "name": "smart-ai-router",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "Production-ready AI model router: classify complexity, route to the right model, guard cost, A/B test — with zero vendor lock-in.",
   "type": "module",
   "main": "./dist/cjs/index.js",
